@@ -12,10 +12,11 @@ from matplotlib.animation import FuncAnimation
 
 #%% Simulation parameters
 n_thermal = 0            # Number of steps to equilibrate, is thrown away
-n_steps = 1000           # Number of steps done after equilibration
+n_steps = 2000           # Number of steps done after equilibration
 proposal_width = np.pi/2 # Theta is updated with steps of [-proposal_width, proposal_width]
 T = 0.7                  # Basis temperature for simulations
 lattice_size = 20        # Simulations without specified N are run with this number
+seed = 42
 #%% Class definition 
 
 class XYModel2D:
@@ -122,7 +123,7 @@ class XYModel2D:
 
 
 #%% Seperate functions for milestones and plotting
-def run_sizes(sizes, T=T, n_thermal=n_thermal, n_steps=n_steps, seed=42):
+def run_sizes(sizes, T=T, n_thermal=n_thermal, n_steps=n_steps, seed=seed):
     results = {}
 
     for N in sizes:
@@ -135,7 +136,7 @@ def run_sizes(sizes, T=T, n_thermal=n_thermal, n_steps=n_steps, seed=42):
     return results
 
 def run_temperatures(temperatures,lattice_size=lattice_size ,n_steps=n_steps,proposal_width=proposal_width,
-   seed=42):
+   seed=seed):
     """
     Run one simulation for each temperature.
 
@@ -156,19 +157,18 @@ def run_temperatures(temperatures,lattice_size=lattice_size ,n_steps=n_steps,pro
             seed=seed,
         )
 
-        magnetizations = model.simulate(n_thermal=n_thermal, n_steps=n_steps)
+        magnetizations = model.simulate()
 
         results[temperature] = magnetizations
 
     return results
 
         
-def compare_initial_conditions(lattice_size=lattice_size,temperature=T,n_steps=n_steps,proposal_width=proposal_width,seed=42,):
+def compare_initial_conditions(lattice_size=lattice_size,temperature=T,n_steps=n_steps,proposal_width=proposal_width,seed=seed):
     """
     Run two simulations: one random start and one aligned start.
     """
     random_model = XYModel2D(N=lattice_size, T=temperature, seed=seed)
-    random_model.set_initial_condition("random")
 
     aligned_model = XYModel2D(N=lattice_size, T=temperature, seed=seed)
     aligned_model.set_initial_condition("aligned")
@@ -262,15 +262,8 @@ def plot_average_magnetization(results): #Not neccesary
     
 
 
-def animate_spin_configuration(
-    lattice_size=lattice_size,
-    temperature=T,
-    n_frames=n_steps,
-    sweeps_per_frame=1,
-    proposal_width=proposal_width,
-    initial_condition="random",
-    seed=42,
-):
+def animate_spin_configuration(lattice_size=lattice_size,temperature=T,n_frames=n_steps,
+    sweeps_per_frame=1,proposal_width=proposal_width,initial_condition="random",seed=seed):
     """
     Animate the 2D XY model spin configuration.
 
@@ -401,7 +394,123 @@ def animate_spin_arrows(
     plt.show()
 
     return animation
-#%% Milestone 1.1: Vary system size
+
+def autocorrelation(magnetizations):
+    """
+    Compute the normalized autocorrelation function of magnetization.
+
+    Parameters
+    ----------
+    magnetizations : np.ndarray
+        Magnetization values measured after equilibration.
+
+    Returns
+    -------
+    np.ndarray
+        Normalized autocorrelation chi(t) / chi(0).
+    """
+    n_measurements = len(magnetizations)
+    correlations = np.empty(n_measurements)
+
+    for lag_time in range(n_measurements):
+        first_values = magnetizations[: n_measurements - lag_time]
+        shifted_values = magnetizations[lag_time:]
+
+        correlations[lag_time] = (
+            np.mean(first_values * shifted_values)
+            - np.mean(first_values) * np.mean(shifted_values)
+        )
+
+    return correlations / correlations[0]
+
+
+def correlation_time(magnetizations):
+    """
+    Estimate the correlation time by summing the normalized autocorrelation
+    until it first becomes negative.
+    """
+    normalized_correlation = autocorrelation(magnetizations)
+
+    positive_values = []
+
+    for value in normalized_correlation:
+        if value < 0:
+            break
+
+        positive_values.append(value)
+
+    return np.sum(positive_values), normalized_correlation
+
+
+def run_correlation_times(temperatures,lattice_size=lattice_size,n_thermal=1000,n_steps=5000,
+    proposal_width=proposal_width,seed=seed):
+    """
+    Estimate correlation time tau for each temperature.
+    """
+    tau_values = {}
+    autocorrelations = {}
+
+    for temperature in temperatures:
+        print(f"Running T = {temperature:.1f}")
+
+        model = XYModel2D(N=lattice_size,T=temperature,J=1.0,seed=seed)
+
+        magnetizations = model.simulate(
+            n_thermal=n_thermal,
+            n_steps=n_steps,
+            proposal_width=proposal_width,
+        )
+
+        tau, normalized_correlation = correlation_time(magnetizations)
+
+        tau_values[temperature] = tau
+        autocorrelations[temperature] = normalized_correlation
+
+        print(f"  tau = {tau:.2f} sweeps")
+
+    return tau_values, autocorrelations
+
+
+def plot_correlation_times(tau_values):
+    """
+    Plot correlation time as a function of temperature.
+    """
+    temperatures = np.array(list(tau_values.keys()))
+    taus = np.array(list(tau_values.values()))
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(temperatures, taus, "o-")
+    plt.axvline(0.881, linestyle="--", label="Tc ≈ 0.881")
+
+    plt.xlabel("Temperature T")
+    plt.ylabel("Correlation time τ [sweeps]")
+    plt.title("Correlation time of the 2D XY model")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_autocorrelation_examples(autocorrelations, selected_temperatures):
+    """
+    Plot selected autocorrelation functions.
+    """
+    plt.figure(figsize=(8, 5))
+
+    for temperature in selected_temperatures:
+        plt.plot(
+            autocorrelations[temperature],
+            label=f"T = {temperature:.1f}",
+        )
+
+    plt.xlabel("Lag time t [sweeps]")
+    plt.ylabel("χ(t) / χ(0)")
+    plt.title("Normalized autocorrelation functions")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+#%% Milestone 7.1: Vary system size
 
 sizes = [10, 20, 50]
     
@@ -410,23 +519,42 @@ results = run_sizes(sizes)
 plot_magnetization_time_series(results)
 #plot_average_magnetization(results)
 
-#%% Milestone 1.2: Vary temperature
+#%% Milestone 7.2: Vary temperature
 temperatures = np.arange(0.5, 2.51, 0.2)
 
 results = run_temperatures(temperatures)
 plot_temperature_series(results)
 
-#%% Milestone 1.3: random and aligned initial configurations
+#%% Milestone 7.3: random and aligned initial configurations
 random_magnetizations, aligned_magnetizations = compare_initial_conditions()
 
 plot_initial_condition_comparison(random_magnetizations,aligned_magnetizations,temperature=T)
 
-#%% Milestone 1.4: animate spin configuration as colored blocks
+#%% Milestone 7.4: animate spin configuration as colored blocks
 %matplotlib qt
 
 animation = animate_spin_configuration()
 
-#%% animate spin configuration as arrows
+#%% Animate spin configuration as arrows
 %matplotlib qt
 
 animation = animate_spin_arrows()
+
+#%% Milestone 8.1: 
+temperatures = np.arange(0.5, 2.51, 0.2)
+
+tau_values, autocorrelations = run_correlation_times(
+    temperatures=temperatures,
+    lattice_size=10,
+    n_thermal=300,
+    n_steps=1000,
+    proposal_width=proposal_width,
+    seed=seed,
+)
+
+plot_correlation_times(tau_values)
+
+plot_autocorrelation_examples(
+    autocorrelations,
+    selected_temperatures=[0.5, 0.9, 1.5, 2.5],
+)
