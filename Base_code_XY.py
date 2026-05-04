@@ -11,12 +11,13 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 #%% Simulation parameters
-n_thermal = 0            # Number of steps to equilibrate, is thrown away
-n_steps = 2000           # Number of steps done after equilibration
+n_thermal = 3000         # Number of steps to equilibrate
+n_steps =  5000          # Number of steps done after equilibration
 proposal_width = np.pi/2 # Theta is updated with steps of [-proposal_width, proposal_width]
 T = 0.7                  # Basis temperature for simulations
-lattice_size = 20        # Simulations without specified N are run with this number
-seed = 43
+lattice_size = 80        # Simulations without specified N are run with this number
+seed = 43                #
+vortex_interval = 20     # Count number of vortices every ... steps
 #%% Class definition 
 
 class XYModel2D:
@@ -123,22 +124,21 @@ class XYModel2D:
             
     def total_energy(self):
         """
-        Return the total energy of the current spin configuration.
+        Calculate total energy of the lattice.
     
-        Each nearest-neighbor pair is counted once by only summing
-        right and upward neighbors.
+        Each nearest-neighbor interaction is counted once.
         """
         energy = 0.0
     
-        for row_index in range(self.N):
-            for column_index in range(self.N):
-                theta = self.theta[row_index, column_index]
+        for row in range(self.N):
+            for col in range(self.N):
+                theta = self.theta[row, col]
     
-                right_theta = self.theta[row_index, (column_index + 1) % self.N]
-                up_theta = self.theta[(row_index + 1) % self.N, column_index]
+                right = self.theta[row, (col + 1) % self.N]
+                up = self.theta[(row + 1) % self.N, col]
     
-                energy -= self.J * np.cos(theta - right_theta)
-                energy -= self.J * np.cos(theta - up_theta)
+                energy -= self.J * np.cos(theta - right)
+                energy -= self.J * np.cos(theta - up)
     
         return energy
 
@@ -416,28 +416,64 @@ def animate_spin_arrows(
 
     return animation
 
-def autocorrelation(magnetizations):
+def wrapped_angle_difference(angle_difference):
     """
-    Compute the normalized autocorrelation function of magnetization.
-
-    Parameters
-    ----------
-    magnetizations : np.ndarray
-        Magnetization values measured after equilibration.
-
-    Returns
-    -------
-    np.ndarray
-        Normalized autocorrelation chi(t) / chi(0).
+    Wrap angle difference to [-pi, pi).
     """
-    n_measurements = len(magnetizations)
-    correlations = np.empty(n_measurements)
+    return (angle_difference + np.pi) % (2 * np.pi) - np.pi
 
-    for lag_time in range(n_measurements):
-        first_values = magnetizations[: n_measurements - lag_time]
-        shifted_values = magnetizations[lag_time:]
 
-        correlations[lag_time] = (
+def vortex_charges(theta):
+    """
+    Compute vortex charge for each plaquette.
+    """
+    lattice_size = theta.shape[0]
+    charges = np.zeros((lattice_size, lattice_size), dtype=int)
+
+    for row in range(lattice_size):
+        for col in range(lattice_size):
+            lower_left = theta[row, col]
+            lower_right = theta[row, (col + 1) % lattice_size]
+            upper_right = theta[(row + 1) % lattice_size, (col + 1) % lattice_size]
+            upper_left = theta[(row + 1) % lattice_size, col]
+
+            winding = (
+                wrapped_angle_difference(lower_right - lower_left)
+                + wrapped_angle_difference(upper_right - lower_right)
+                + wrapped_angle_difference(upper_left - upper_right)
+                + wrapped_angle_difference(lower_left - upper_left)
+            )
+
+            charges[row, col] = int(np.rint(winding / (2 * np.pi)))
+
+    return charges
+
+
+def count_vortices(theta):
+    """
+    Count vortices and anti-vortices.
+    """
+    charges = vortex_charges(theta)
+
+    n_vortices = np.sum(charges == 1)
+    n_antivortices = np.sum(charges == -1)
+
+    return n_vortices, n_antivortices
+
+def autocorrelation(values):
+    """
+    Compute normalized autocorrelation function.
+    """
+    values = np.asarray(values)
+    n_values = len(values)
+
+    correlations = np.empty(n_values)
+
+    for lag in range(n_values):
+        first_values = values[: n_values - lag]
+        shifted_values = values[lag:]
+
+        correlations[lag] = (
             np.mean(first_values * shifted_values)
             - np.mean(first_values) * np.mean(shifted_values)
         )
@@ -445,12 +481,11 @@ def autocorrelation(magnetizations):
     return correlations / correlations[0]
 
 
-def correlation_time(magnetizations):
+def correlation_time(values):
     """
-    Estimate the correlation time by summing the normalized autocorrelation
-    until it first becomes negative.
+    Estimate tau by summing normalized autocorrelation until it becomes negative.
     """
-    normalized_correlation = autocorrelation(magnetizations)
+    normalized_correlation = autocorrelation(values)
 
     positive_values = []
 
@@ -460,181 +495,505 @@ def correlation_time(magnetizations):
 
         positive_values.append(value)
 
-    return np.sum(positive_values), normalized_correlation
+    tau = np.sum(positive_values)
 
+    return tau, normalized_correlation
 
-def run_correlation_times(temperatures,lattice_size=lattice_size,n_thermal=1000,n_steps=5000,
-    proposal_width=proposal_width,seed=seed):
-    """
-    Estimate correlation time tau for each temperature.
-    """
-    tau_values = {}
-    autocorrelations = {}
-
-    for temperature in temperatures:
-        print(f"Running T = {temperature:.1f}")
-
-        model = XYModel2D(N=lattice_size,T=temperature,J=1.0,seed=seed)
-
-        magnetizations = model.simulate(
-            n_thermal=n_thermal,
-            n_steps=n_steps,
-            proposal_width=proposal_width,
-        )
-
-        tau, normalized_correlation = correlation_time(magnetizations)
-
-        tau_values[temperature] = tau
-        autocorrelations[temperature] = normalized_correlation
-
-        print(f"  tau = {tau:.2f} sweeps")
-
-    return tau_values, autocorrelations
-
-
-def plot_correlation_times(tau_values):
-    """
-    Plot correlation time as a function of temperature.
-    """
-    temperatures = np.array(list(tau_values.keys()))
-    taus = np.array(list(tau_values.values()))
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(temperatures, taus, "o-")
-    plt.axvline(0.881, linestyle="--", label="Tc ≈ 0.881")
-
-    plt.xlabel("Temperature T")
-    plt.ylabel("Correlation time τ [sweeps]")
-    plt.title("Correlation time of the 2D XY model")
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_autocorrelation_examples(autocorrelations, selected_temperatures):
-    """
-    Plot selected autocorrelation functions.
-    """
-    plt.figure(figsize=(8, 5))
-
-    for temperature in selected_temperatures:
-        plt.plot(
-            autocorrelations[temperature],
-            label=f"T = {temperature:.1f}",
-        )
-
-    plt.xlabel("Lag time t [sweeps]")
-    plt.ylabel("χ(t) / χ(0)")
-    plt.title("Normalized autocorrelation functions")
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-    
-    
-def measure_observables(
-    model,
-    n_thermal=n_thermal,
-    n_steps=n_steps,
-    proposal_width=proposal_width,
-):
-    """
-    Equilibrate the model, then measure magnetization and energy.
-    """
-    for _ in range(n_thermal):
-        model.sweep(proposal_width=proposal_width)
-
-    magnetizations = np.empty(n_steps)
-    energies = np.empty(n_steps)
-
-    for step_index in range(n_steps):
-        model.sweep(proposal_width=proposal_width)
-
-        magnetizations[step_index] = model.magnetization()
-        energies[step_index] = model.total_energy()
-
-    return magnetizations, energies
-
-def thermodynamic_quantities(
-    magnetizations,
-    energies,
-    lattice_size,
-    temperature,
-):
-    """
-    Compute mean thermodynamic quantities from measured time series.
-    """
-    number_of_spins = lattice_size**2
-    beta = 1.0 / temperature
-
-    mean_magnetization = np.mean(magnetizations)
-    std_magnetization = np.std(magnetizations, ddof=1)
-
-    energies_per_spin = energies / number_of_spins
-    mean_energy_per_spin = np.mean(energies_per_spin)
-    std_energy_per_spin = np.std(energies_per_spin, ddof=1)
-
-    magnetic_susceptibility = (
-        beta
-        * number_of_spins
-        * (np.mean(magnetizations**2) - np.mean(magnetizations) ** 2)
-    )
-
-    specific_heat = (
-        beta**2
-        / number_of_spins
-        * (np.mean(energies**2) - np.mean(energies) ** 2)
-    )
-
-    return {
-        "mean_magnetization": mean_magnetization,
-        "std_magnetization": std_magnetization,
-        "mean_energy_per_spin": mean_energy_per_spin,
-        "std_energy_per_spin": std_energy_per_spin,
-        "magnetic_susceptibility": magnetic_susceptibility,
-        "specific_heat": specific_heat,
-    }
-
-def run_thermodynamic_observables(
+def run_full_temperature_analysis(
     temperatures,
     lattice_size=lattice_size,
     n_thermal=n_thermal,
     n_steps=n_steps,
-    proposal_width= proposal_width,
+    proposal_width=proposal_width,
+    vortex_interval=vortex_interval,
     seed=seed,
 ):
     """
-    Compute thermodynamic observables as a function of temperature.
+    For each temperature:
+    1. Equilibrate once.
+    2. Run one measurement simulation.
+    3. Measure magnetization, energy, vortices.
+    4. Compute tau, m, e, chi_M, and C.
     """
     results = {}
 
     for temperature in temperatures:
-        temperature_key = round(temperature, 2)
-        print(f"Running T = {temperature_key:.2f}")
+        temperature = round(float(temperature), 2)
+        print(f"Running T = {temperature:.2f}")
 
         model = XYModel2D(
             N=lattice_size,
-            T=temperature_key,
+            T=temperature,
             J=1.0,
             seed=seed,
         )
 
-        magnetizations, energies = measure_observables(
-            model=model,
-            n_thermal=n_thermal,
-            n_steps=n_steps,
-            proposal_width=proposal_width,
+        # Equilibration
+        thermal_magnetizations = np.empty(n_thermal)
+        thermal_energies = np.empty(n_thermal)
+        
+        for step in range(n_thermal):
+            model.sweep(proposal_width=proposal_width)
+        
+            thermal_magnetizations[step] = model.magnetization()
+            thermal_energies[step] = model.total_energy() / lattice_size**2
+
+        magnetizations = np.empty(n_steps)
+        energies = np.empty(n_steps)
+
+        vortex_counts = []
+        antivortex_counts = []
+
+        # Measurement run
+        for step in range(n_steps):
+            model.sweep(proposal_width=proposal_width)
+
+            magnetizations[step] = model.magnetization()
+            energies[step] = model.total_energy()
+
+            if step % vortex_interval == 0:
+                n_vortices, n_antivortices = count_vortices(model.theta)
+                vortex_counts.append(n_vortices)
+                antivortex_counts.append(n_antivortices)
+
+        number_of_spins = lattice_size**2
+        beta = 1.0 / temperature
+
+        energies_per_spin = energies / number_of_spins
+
+        tau, normalized_correlation = correlation_time(magnetizations)
+
+        mean_m = np.mean(magnetizations)
+        std_m = np.std(magnetizations, ddof=1)
+
+        mean_e = np.mean(energies_per_spin)
+        std_e = np.std(energies_per_spin, ddof=1)
+
+        chi_m = beta * number_of_spins * (
+            np.mean(magnetizations**2) - np.mean(magnetizations) ** 2
         )
 
-        results[temperature_key] = thermodynamic_quantities(
-            magnetizations=magnetizations,
-            energies=energies,
-            lattice_size=lattice_size,
-            temperature=temperature_key,
+        specific_heat = beta**2 / number_of_spins * (
+            np.mean(energies**2) - np.mean(energies) ** 2
+        )
+
+        results[temperature] = {
+            "tau": tau,
+            "autocorrelation": normalized_correlation,
+            "mean_m": mean_m,
+            "std_m": std_m,
+            "mean_e": mean_e,
+            "std_e": std_e,
+            "chi_m": chi_m,
+            "specific_heat": specific_heat,
+            "mean_vortices": np.mean(vortex_counts),
+            "std_vortices": np.std(vortex_counts, ddof=1),
+            "mean_antivortices": np.mean(antivortex_counts),
+            "std_antivortices": np.std(antivortex_counts, ddof=1),
+            "thermal_magnetizations": thermal_magnetizations,
+            "thermal_energies": thermal_energies,
+        }
+
+        print(
+            f"  tau = {tau:.2f}, "
+            f"<m> = {mean_m:.3f}, "
+            f"<e> = {mean_e:.3f}, "
+            f"vortices = {np.mean(vortex_counts):.1f}"
         )
 
     return results
+
+def plot_full_results(results):
+    """
+    Plot tau, m, e, chi_M, C, and vortex counts versus temperature.
+    """
+    temperatures = np.array(sorted(results.keys()))
+
+    tau = np.array([results[T]["tau"] for T in temperatures])
+    mean_m = np.array([results[T]["mean_m"] for T in temperatures])
+    std_m = np.array([results[T]["std_m"] for T in temperatures])
+    mean_e = np.array([results[T]["mean_e"] for T in temperatures])
+    std_e = np.array([results[T]["std_e"] for T in temperatures])
+    chi_m = np.array([results[T]["chi_m"] for T in temperatures])
+    specific_heat = np.array([results[T]["specific_heat"] for T in temperatures])
+    vortices = np.array([results[T]["mean_vortices"] for T in temperatures])
+    antivortices = np.array([results[T]["mean_antivortices"] for T in temperatures])
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(temperatures, tau, "o-")
+    plt.axvline(0.881, linestyle="--", label="Tc ≈ 0.881")
+    plt.xlabel("Temperature T")
+    plt.ylabel("Correlation time τ [sweeps]")
+    plt.title("Correlation time vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(7, 5))
+    plt.errorbar(temperatures, mean_m, yerr=std_m, fmt="o-", capsize=4)
+    plt.xlabel("Temperature T")
+    plt.ylabel("Magnetization per spin <|m|>")
+    plt.title("Magnetization vs temperature")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(7, 5))
+    plt.errorbar(temperatures, mean_e, yerr=std_e, fmt="o-", capsize=4)
+    plt.xlabel("Temperature T")
+    plt.ylabel("Energy per spin <e>")
+    plt.title("Energy vs temperature")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(temperatures, chi_m, "o-")
+    plt.axvline(0.881, linestyle="--", label="Tc ≈ 0.881")
+    plt.xlabel("Temperature T")
+    plt.ylabel("Magnetic susceptibility χM")
+    plt.title("Magnetic susceptibility vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(temperatures, specific_heat, "o-")
+    plt.axvline(0.881, linestyle="--", label="Tc ≈ 0.881")
+    plt.xlabel("Temperature T")
+    plt.ylabel("Specific heat C")
+    plt.title("Specific heat vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(temperatures, vortices, "o-", label="Vortices")
+    plt.plot(temperatures, antivortices, "s-", label="Anti-vortices")
+    plt.xlabel("Temperature T")
+    plt.ylabel("Average count")
+    plt.title("Vortex and anti-vortex count vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def plot_equilibration_from_full_run(results, selected_temperatures):
+    """
+    Plot thermalization curves before the measurement phase.
+    """
+    plt.figure(figsize=(8, 5))
+
+    for temperature in selected_temperatures:
+        temperature = round(float(temperature), 2)
+
+        plt.plot(
+            results[temperature]["thermal_magnetizations"],
+            label=f"T = {temperature:.1f}",
+        )
+
+    plt.xlabel("Thermalization sweep")
+    plt.ylabel("Magnetization per spin |m|")
+    plt.title("Equilibration before measurement")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(8, 5))
+
+    for temperature in selected_temperatures:
+        temperature = round(float(temperature), 2)
+
+        plt.plot(
+            results[temperature]["thermal_energies"],
+            label=f"T = {temperature:.1f}",
+        )
+
+    plt.xlabel("Thermalization sweep")
+    plt.ylabel("Energy per spin e")
+    plt.title("Energy equilibration before measurement")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+# def autocorrelation(magnetizations):
+#     """
+#     Compute the normalized autocorrelation function of magnetization.
+
+#     Parameters
+#     ----------
+#     magnetizations : np.ndarray
+#         Magnetization values measured after equilibration.
+
+#     Returns
+#     -------
+#     np.ndarray
+#         Normalized autocorrelation chi(t) / chi(0).
+#     """
+#     n_measurements = len(magnetizations)
+#     correlations = np.empty(n_measurements)
+
+#     for lag_time in range(n_measurements):
+#         first_values = magnetizations[: n_measurements - lag_time]
+#         shifted_values = magnetizations[lag_time:]
+
+#         correlations[lag_time] = (
+#             np.mean(first_values * shifted_values)
+#             - np.mean(first_values) * np.mean(shifted_values)
+#         )
+
+#     return correlations / correlations[0]
+
+
+# def correlation_time(magnetizations):
+#     """
+#     Estimate the correlation time by summing the normalized autocorrelation
+#     until it first becomes negative.
+#     """
+#     normalized_correlation = autocorrelation(magnetizations)
+
+#     positive_values = []
+
+#     for value in normalized_correlation:
+#         if value < 0:
+#             break
+
+#         positive_values.append(value)
+
+#     return np.sum(positive_values), normalized_correlation
+
+
+# def run_correlation_times(temperatures,lattice_size=lattice_size,n_thermal=1000,n_steps=5000,
+#     proposal_width=proposal_width,seed=seed):
+#     """
+#     Estimate correlation time tau for each temperature.
+#     """
+#     tau_values = {}
+#     autocorrelations = {}
+
+#     for temperature in temperatures:
+#         print(f"Running T = {temperature:.1f}")
+
+#         model = XYModel2D(N=lattice_size,T=temperature,J=1.0,seed=seed)
+
+#         magnetizations = model.simulate(
+#             n_thermal=n_thermal,
+#             n_steps=n_steps,
+#             proposal_width=proposal_width,
+#         )
+
+#         tau, normalized_correlation = correlation_time(magnetizations)
+
+#         tau_values[temperature] = tau
+#         autocorrelations[temperature] = normalized_correlation
+
+#         print(f"  tau = {tau:.2f} sweeps")
+
+#     return tau_values, autocorrelations
+
+
+# def plot_correlation_times(tau_values):
+#     """
+#     Plot correlation time as a function of temperature.
+#     """
+#     temperatures = np.array(list(tau_values.keys()))
+#     taus = np.array(list(tau_values.values()))
+
+#     plt.figure(figsize=(8, 5))
+#     plt.plot(temperatures, taus, "o-")
+#     plt.axvline(0.881, linestyle="--", label="Tc ≈ 0.881")
+
+#     plt.xlabel("Temperature T")
+#     plt.ylabel("Correlation time τ [sweeps]")
+#     plt.title("Correlation time of the 2D XY model")
+#     plt.legend()
+#     plt.grid(alpha=0.3)
+#     plt.tight_layout()
+#     plt.show()
+
+
+# def plot_autocorrelation_examples(autocorrelations, selected_temperatures):
+#     """
+#     Plot selected autocorrelation functions.
+#     """
+#     plt.figure(figsize=(8, 5))
+
+#     for temperature in selected_temperatures:
+#         plt.plot(
+#             autocorrelations[temperature],
+#             label=f"T = {temperature:.1f}",
+#         )
+
+#     plt.xlabel("Lag time t [sweeps]")
+#     plt.ylabel("χ(t) / χ(0)")
+#     plt.title("Normalized autocorrelation functions")
+#     plt.legend()
+#     plt.grid(alpha=0.3)
+#     plt.tight_layout()
+#     plt.show()
+    
+    
+# def measure_observables(
+#     model,
+#     n_thermal=n_thermal,
+#     n_steps=n_steps,
+#     proposal_width=proposal_width,
+# ):
+#     """
+#     Equilibrate the model, then measure magnetization and energy.
+#     """
+#     for _ in range(n_thermal):
+#         model.sweep(proposal_width=proposal_width)
+
+#     magnetizations = np.empty(n_steps)
+#     energies = np.empty(n_steps)
+
+#     for step_index in range(n_steps):
+#         model.sweep(proposal_width=proposal_width)
+
+#         magnetizations[step_index] = model.magnetization()
+#         energies[step_index] = model.total_energy()
+
+#     return magnetizations, energies
+
+# def thermodynamic_quantities(
+#     magnetizations,
+#     energies,
+#     lattice_size,
+#     temperature,
+# ):
+#     """
+#     Compute mean thermodynamic quantities from measured time series.
+#     """
+#     number_of_spins = lattice_size**2
+#     beta = 1.0 / temperature
+
+#     mean_magnetization = np.mean(magnetizations)
+#     std_magnetization = np.std(magnetizations, ddof=1)
+
+#     energies_per_spin = energies / number_of_spins
+#     mean_energy_per_spin = np.mean(energies_per_spin)
+#     std_energy_per_spin = np.std(energies_per_spin, ddof=1)
+
+#     magnetic_susceptibility = (
+#         beta
+#         * number_of_spins
+#         * (np.mean(magnetizations**2) - np.mean(magnetizations) ** 2)
+#     )
+
+#     specific_heat = (
+#         beta**2
+#         / number_of_spins
+#         * (np.mean(energies**2) - np.mean(energies) ** 2)
+#     )
+
+#     return {
+#         "mean_magnetization": mean_magnetization,
+#         "std_magnetization": std_magnetization,
+#         "mean_energy_per_spin": mean_energy_per_spin,
+#         "std_energy_per_spin": std_energy_per_spin,
+#         "magnetic_susceptibility": magnetic_susceptibility,
+#         "specific_heat": specific_heat,
+#     }
+
+# def run_thermodynamic_observables(
+#     temperatures,
+#     lattice_size=lattice_size,
+#     n_thermal=n_thermal,
+#     n_steps=n_steps,
+#     proposal_width= proposal_width,
+#     seed=seed,
+# ):
+#     """
+#     Compute thermodynamic observables as a function of temperature.
+#     """
+#     results = {}
+
+#     for temperature in temperatures:
+#         temperature_key = round(temperature, 2)
+#         print(f"Running T = {temperature_key:.2f}")
+
+#         model = XYModel2D(
+#             N=lattice_size,
+#             T=temperature_key,
+#             J=1.0,
+#             seed=seed,
+#         )
+
+#         magnetizations, energies = measure_observables(
+#             model=model,
+#             n_thermal=n_thermal,
+#             n_steps=n_steps,
+#             proposal_width=proposal_width,
+#         )
+
+#         results[temperature_key] = thermodynamic_quantities(
+#             magnetizations=magnetizations,
+#             energies=energies,
+#             lattice_size=lattice_size,
+#             temperature=temperature_key,
+#         )
+
+#     return results
+
+# def plot_thermodynamic_results(results):
+#     """
+#     Plot m, e, magnetic susceptibility, and specific heat versus temperature.
+#     """
+#     temperatures = np.array(sorted(results.keys()))
+
+#     magnetizations = np.array(
+#         [results[temperature]["mean_magnetization"] for temperature in temperatures]
+#     )
+#     energies = np.array(
+#         [results[temperature]["mean_energy_per_spin"] for temperature in temperatures]
+#     )
+#     susceptibilities = np.array(
+#         [results[temperature]["magnetic_susceptibility"] for temperature in temperatures]
+#     )
+#     specific_heats = np.array(
+#         [results[temperature]["specific_heat"] for temperature in temperatures]
+#     )
+
+#     plt.figure(figsize=(7, 5))
+#     plt.plot(temperatures, magnetizations, "o-")
+#     plt.xlabel("Temperature T")
+#     plt.ylabel("Mean magnetization per spin <|m|>")
+#     plt.title("Magnetization vs temperature")
+#     plt.grid(alpha=0.3)
+#     plt.tight_layout()
+#     plt.show()
+
+#     plt.figure(figsize=(7, 5))
+#     plt.plot(temperatures, energies, "o-")
+#     plt.xlabel("Temperature T")
+#     plt.ylabel("Mean energy per spin <e>")
+#     plt.title("Energy vs temperature")
+#     plt.grid(alpha=0.3)
+#     plt.tight_layout()
+#     plt.show()
+
+#     plt.figure(figsize=(7, 5))
+#     plt.plot(temperatures, susceptibilities, "o-")
+#     plt.xlabel("Temperature T")
+#     plt.ylabel("Magnetic susceptibility per spin χM")
+#     plt.title("Magnetic susceptibility vs temperature")
+#     plt.grid(alpha=0.3)
+#     plt.tight_layout()
+#     plt.show()
+
+#     plt.figure(figsize=(7, 5))
+#     plt.plot(temperatures, specific_heats, "o-")
+#     plt.xlabel("Temperature T")
+#     plt.ylabel("Specific heat per spin C")
+#     plt.title("Specific heat vs temperature")
+#     plt.grid(alpha=0.3)
+#     plt.tight_layout()
+#     plt.show()
 #%% Milestone 7.1: Vary system size
 
 sizes = [10, 20, 50]
@@ -665,21 +1024,36 @@ animation = animate_spin_configuration()
 
 animation = animate_spin_arrows()
 
-#%% Milestone 8.1: 
+#%% Milestone 8.1: Correlation times
+# temperatures = np.arange(0.5, 2.51, 0.2)
+
+# tau_values, autocorrelations = run_correlation_times(
+#     temperatures=temperatures,
+#     lattice_size=50,
+#     n_thermal=1000,
+#     n_steps=2000,
+#     proposal_width=proposal_width,
+#     seed=seed,
+# )
+
+# plot_correlation_times(tau_values)
+
+# plot_autocorrelation_examples(
+#     autocorrelations,
+#     selected_temperatures = np.arange(0.5, 2.51, 0.2),
+# )
+# plot_thermodynamic_results(thermo_results)
+
+#%% Milestone 8.2: Measure observable quantities
+# temperatures = np.round(np.arange(0.5, 2.51, 0.2), 2)
+
+# thermo_results = run_thermodynamic_observables(temperatures=temperatures)
+
+#%% Total run of all observables and correlation time
 temperatures = np.arange(0.5, 2.51, 0.2)
 
-tau_values, autocorrelations = run_correlation_times(
-    temperatures=temperatures,
-    lattice_size=50,
-    n_thermal=1000,
-    n_steps=2000,
-    proposal_width=proposal_width,
-    seed=seed,
-)
+results = run_full_temperature_analysis(temperatures)
 
-plot_correlation_times(tau_values)
+plot_full_results(results)
 
-plot_autocorrelation_examples(
-    autocorrelations,
-    selected_temperatures=[0.5, 0.9, 1.5, 2.5],
-)
+plot_equilibration_from_full_run(results,selected_temperatures=[0.5, 0.9, 1.1, 2.5])
