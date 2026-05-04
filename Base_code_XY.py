@@ -16,7 +16,7 @@ n_steps = 2000           # Number of steps done after equilibration
 proposal_width = np.pi/2 # Theta is updated with steps of [-proposal_width, proposal_width]
 T = 0.7                  # Basis temperature for simulations
 lattice_size = 20        # Simulations without specified N are run with this number
-seed = 42
+seed = 43
 #%% Class definition 
 
 class XYModel2D:
@@ -120,6 +120,27 @@ class XYModel2D:
 
         elif initial_condition == "aligned":
             self.theta = np.zeros((self.N, self.N))
+            
+    def total_energy(self):
+        """
+        Return the total energy of the current spin configuration.
+    
+        Each nearest-neighbor pair is counted once by only summing
+        right and upward neighbors.
+        """
+        energy = 0.0
+    
+        for row_index in range(self.N):
+            for column_index in range(self.N):
+                theta = self.theta[row_index, column_index]
+    
+                right_theta = self.theta[row_index, (column_index + 1) % self.N]
+                up_theta = self.theta[(row_index + 1) % self.N, column_index]
+    
+                energy -= self.J * np.cos(theta - right_theta)
+                energy -= self.J * np.cos(theta - up_theta)
+    
+        return energy
 
 
 #%% Seperate functions for milestones and plotting
@@ -510,6 +531,110 @@ def plot_autocorrelation_examples(autocorrelations, selected_temperatures):
     plt.grid(alpha=0.3)
     plt.tight_layout()
     plt.show()
+    
+    
+def measure_observables(
+    model,
+    n_thermal=n_thermal,
+    n_steps=n_steps,
+    proposal_width=proposal_width,
+):
+    """
+    Equilibrate the model, then measure magnetization and energy.
+    """
+    for _ in range(n_thermal):
+        model.sweep(proposal_width=proposal_width)
+
+    magnetizations = np.empty(n_steps)
+    energies = np.empty(n_steps)
+
+    for step_index in range(n_steps):
+        model.sweep(proposal_width=proposal_width)
+
+        magnetizations[step_index] = model.magnetization()
+        energies[step_index] = model.total_energy()
+
+    return magnetizations, energies
+
+def thermodynamic_quantities(
+    magnetizations,
+    energies,
+    lattice_size,
+    temperature,
+):
+    """
+    Compute mean thermodynamic quantities from measured time series.
+    """
+    number_of_spins = lattice_size**2
+    beta = 1.0 / temperature
+
+    mean_magnetization = np.mean(magnetizations)
+    std_magnetization = np.std(magnetizations, ddof=1)
+
+    energies_per_spin = energies / number_of_spins
+    mean_energy_per_spin = np.mean(energies_per_spin)
+    std_energy_per_spin = np.std(energies_per_spin, ddof=1)
+
+    magnetic_susceptibility = (
+        beta
+        * number_of_spins
+        * (np.mean(magnetizations**2) - np.mean(magnetizations) ** 2)
+    )
+
+    specific_heat = (
+        beta**2
+        / number_of_spins
+        * (np.mean(energies**2) - np.mean(energies) ** 2)
+    )
+
+    return {
+        "mean_magnetization": mean_magnetization,
+        "std_magnetization": std_magnetization,
+        "mean_energy_per_spin": mean_energy_per_spin,
+        "std_energy_per_spin": std_energy_per_spin,
+        "magnetic_susceptibility": magnetic_susceptibility,
+        "specific_heat": specific_heat,
+    }
+
+def run_thermodynamic_observables(
+    temperatures,
+    lattice_size=lattice_size,
+    n_thermal=n_thermal,
+    n_steps=n_steps,
+    proposal_width= proposal_width,
+    seed=seed,
+):
+    """
+    Compute thermodynamic observables as a function of temperature.
+    """
+    results = {}
+
+    for temperature in temperatures:
+        temperature_key = round(temperature, 2)
+        print(f"Running T = {temperature_key:.2f}")
+
+        model = XYModel2D(
+            N=lattice_size,
+            T=temperature_key,
+            J=1.0,
+            seed=seed,
+        )
+
+        magnetizations, energies = measure_observables(
+            model=model,
+            n_thermal=n_thermal,
+            n_steps=n_steps,
+            proposal_width=proposal_width,
+        )
+
+        results[temperature_key] = thermodynamic_quantities(
+            magnetizations=magnetizations,
+            energies=energies,
+            lattice_size=lattice_size,
+            temperature=temperature_key,
+        )
+
+    return results
 #%% Milestone 7.1: Vary system size
 
 sizes = [10, 20, 50]
@@ -545,9 +670,9 @@ temperatures = np.arange(0.5, 2.51, 0.2)
 
 tau_values, autocorrelations = run_correlation_times(
     temperatures=temperatures,
-    lattice_size=10,
-    n_thermal=300,
-    n_steps=1000,
+    lattice_size=50,
+    n_thermal=1000,
+    n_steps=2000,
     proposal_width=proposal_width,
     seed=seed,
 )
