@@ -11,13 +11,14 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 #%% Simulation parameters
-n_thermal = 3000         # Number of steps to equilibrate
-n_steps =  5000          # Number of steps done after equilibration
+n_thermal = 3000        # Number of steps to equilibrate
+n_steps =  20         # Number of steps done after equilibration
 proposal_width = np.pi/2 # Theta is updated with steps of [-proposal_width, proposal_width]
 T = 0.7                  # Basis temperature for simulations
-lattice_size = 80        # Simulations without specified N are run with this number
+lattice_size = 20       # Simulations without specified N are run with this number
 seed = 43                #
 vortex_interval = 20     # Count number of vortices every ... steps
+critical_temperature = 0.881
 #%% Class definition 
 
 class XYModel2D:
@@ -527,6 +528,10 @@ def run_full_temperature_analysis(
             J=1.0,
             seed=seed,
         )
+        if temperature < critical_temperature:
+            model.set_initial_condition("aligned")
+        else:
+            model.set_initial_condition("random")
 
         # Equilibration
         thermal_magnetizations = np.empty(n_thermal)
@@ -1056,4 +1061,4 @@ results = run_full_temperature_analysis(temperatures)
 
 plot_full_results(results)
 
-plot_equilibration_from_full_run(results,selected_temperatures=[0.5, 0.9, 1.1, 2.5])
+plot_equilibration_from_full_run(results,selected_temperatures=[0.5, 0.7, 0.9, 1.1, 2.5])
