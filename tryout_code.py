@@ -1069,26 +1069,27 @@ def plot_full_results(results, selected_temperatures=None):
 
 #%%
 # Simulate long and save data
-temperature = 0.5
-n_thermal = 2000
-n_steps = 10000
-seed = 0
+for temperature in [1.1, 1.3, 1.5]:
 
-results = run_single_simulation(temperature = temperature, lattice_size = 50, n_thermal = n_thermal, n_steps = n_steps, seed = 0)
-
-#%%
-# Save data
-file_name = "T" + str(temperature) + ".n_t" + str(n_thermal) + ".n_s" + str(n_steps) + ".s" + str(seed) + ".pkl"
-location_name = "saved_data/" + file_name
-
-# print(os.getcwd()) # to get where python is saving to
-os.chdir(r"C:\Users\David\Documents\Git\ComputationalPhysicsB")
-os.makedirs("saved_data", exist_ok=True)
-
-with open(location_name, "wb") as file:
-    pickle.dump(results, file)
-
-print("Saved!")
+    n_thermal = 2000
+    n_steps = 10000
+    seed = 0
+    
+    results = run_single_simulation(temperature = temperature, lattice_size = 50, n_thermal = n_thermal, n_steps = n_steps, seed = 0)
+    
+    
+    # Save data
+    file_name = "T" + str(temperature) + ".n_t" + str(n_thermal) + ".n_s" + str(n_steps) + ".s" + str(seed) + ".pkl"
+    location_name = "saved_data/" + file_name
+    
+    # print(os.getcwd()) # to get where python is saving to
+    os.chdir(r"C:\Users\David\Documents\Git\ComputationalPhysicsB")
+    os.makedirs("saved_data", exist_ok=True)
+    
+    with open(location_name, "wb") as file:
+        pickle.dump(results, file)
+    
+    print("Saved!")
 
 #%%
 # Load data
