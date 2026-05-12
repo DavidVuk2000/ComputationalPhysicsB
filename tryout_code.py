@@ -9,6 +9,8 @@ Created on Mon May 11 21:49:08 2026
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import pickle
+import os
 
 #%% Simulation parameters
 n_thermal = 0        # Number of steps to equilibrate
@@ -218,7 +220,7 @@ def autocorrelation(values):
 
 def correlation_time(values):
     """
-    Estimate tau by summing normalized autocorrelation until it becomes negative.
+    Estimate tau by summing normalized autocorrelation until it reaches zero    .
     """
     normalized_correlation = autocorrelation(values)
 
@@ -275,8 +277,7 @@ def block_errors(magnetizations, energies, temperature, number_of_spins, tau):
     """
     Estimate susceptibility and specific heat with blocking.
 
-    Each block should be much longer than tau.
-    Lecture 8 suggests a block length of about 16*tau.
+    Each block should be much longer than tau, 16 * tau is used.
     """
     block_size = round(16 * tau)
 
@@ -322,20 +323,6 @@ def block_errors(magnetizations, energies, temperature, number_of_spins, tau):
 def required_measurement_steps(tau, n_blocks=20, block_factor=16):
     """
     Determine the number of measurement sweeps needed for blocking.
-
-    Parameters
-    ----------
-    tau : float
-        Correlation time.
-    n_blocks : int
-        Desired number of independent blocks.
-    block_factor : int
-        Block length in units of tau. Lecture 8 suggests about 16*tau.
-
-    Returns
-    -------
-    int
-        Required number of measurement sweeps.
     """
     block_size = max(1, int(round(block_factor * tau)))
 
@@ -343,7 +330,16 @@ def required_measurement_steps(tau, n_blocks=20, block_factor=16):
 
 
 #%%Running functions
-def run_sizes(sizes, T=T, n_thermal=n_thermal, n_steps=n_steps, seed=seed):
+def run_sizes(
+    sizes, 
+    T=T, 
+    n_thermal=n_thermal, 
+    n_steps=n_steps, 
+    seed=seed
+):
+    """
+    Run one simulation for each temperature.
+    """
     results = {}
 
     for N in sizes:
@@ -355,15 +351,15 @@ def run_sizes(sizes, T=T, n_thermal=n_thermal, n_steps=n_steps, seed=seed):
 
     return results
 
-def run_temperatures(temperatures,lattice_size=lattice_size ,n_steps=n_steps,proposal_width=proposal_width,
-   seed=seed):
+def run_temperatures(
+    temperatures,
+    lattice_size = lattice_size,
+    n_steps = n_steps,
+    proposal_width = proposal_width,
+    seed = seed
+):
     """
-    Run one simulation for each temperature.
-
-    Returns
-    -------
-    dict
-        Dictionary with temperatures as keys and magnetization arrays as values.
+    Runs one simulation for each temperature.
     """
     results = {}
 
@@ -384,9 +380,15 @@ def run_temperatures(temperatures,lattice_size=lattice_size ,n_steps=n_steps,pro
     return results
 
         
-def compare_initial_conditions(lattice_size=lattice_size,temperature=T,n_steps=n_steps,proposal_width=proposal_width,seed=seed):
+def compare_initial_conditions(
+    lattice_size = lattice_size,
+    temperature = T,
+    n_steps = n_steps,
+    proposal_width = proposal_width,
+    seed = seed
+):
     """
-    Run two simulations: one random start and one aligned start.
+    Runs two simulations: one random start and one aligned start.
     """
     
     random_model = XYModel2D(N=lattice_size, T=temperature, seed=seed)
@@ -399,6 +401,124 @@ def compare_initial_conditions(lattice_size=lattice_size,temperature=T,n_steps=n
     aligned_magnetizations = aligned_model.simulate()
 
     return random_magnetizations, aligned_magnetizations
+
+def run_correlation_time_analysis(
+    temperatures,
+    lattice_size = lattice_size,
+    n_thermals = n_thermals,
+    n_steps = n_steps,
+    proposal_width = proposal_width,
+    seed = seed
+):
+    results = {}
+    
+    for temperature, n_thermal in zip(temperatures, n_thermals):
+
+        temperature = round(float(temperature), 2)
+
+        print(
+            f"Running T = {temperature:.2f} "
+            f"with n_thermal = {n_thermal} "
+            f"with n_steps = {n_steps}"
+        )
+        model = XYModel2D(
+            N=lattice_size,
+            T=temperature,
+            J=1.0,
+            seed=seed,
+        )
+        
+        if temperature < critical_temperature:
+            model.set_initial_condition("aligned")
+        else:
+            model.set_initial_condition("random")
+            
+        # Equilibration
+        thermal_magnetizations = np.empty(n_thermal)
+        #thermal_energies = np.empty(n_thermal)
+
+        for step in range(n_thermal):
+            model.sweep(proposal_width=proposal_width)
+            thermal_magnetizations[step] = model.magnetization()
+            #thermal_energies[step] = model.total_energy() / lattice_size**2
+            
+        # Compute correlation function
+        magnetizations = np.empty(n_steps)
+        #energies = np.empty(n_steps)
+        
+        for step in range(n_steps):
+            model.sweep(proposal_width=proposal_width)
+            magnetizations[step] = model.magnetization()
+            #mx, my = model.magnetization_vector()
+            #magnetizations[step] = mx
+            
+            #energies[step] = model.total_energy() / lattice_size**2
+        
+        tau, normalized_correlation = correlation_time(magnetizations)
+        
+        results[temperature] = {
+            "tau": tau,
+            "autocorrelation": normalized_correlation,
+            "thermal_magnetizations": thermal_magnetizations,
+            "magnetizations": magnetizations
+        }
+    
+    return results
+
+def run_single_simulation(
+    temperature,
+    lattice_size = lattice_size,
+    n_thermal = n_thermals,
+    n_steps = n_steps,
+    proposal_width = proposal_width,
+    vortex_interval = vortex_interval,
+    seed = seed
+):
+    results = {}
+    print(
+        f"Running T = {temperature:.2f} "
+        f"with n_thermal = {n_thermal} "
+        f"with n_steps = {n_steps}"
+    )
+    model = XYModel2D(
+        N=lattice_size,
+        T=temperature,
+        J=1.0,
+        seed=seed,
+    )
+    
+    if temperature < critical_temperature:
+        model.set_initial_condition("aligned")
+    else:
+        model.set_initial_condition("random")
+    
+    # Equilibration
+    thermal_magnetizations = np.empty(n_thermal)
+    thermal_energies = np.empty(n_thermal)
+
+    for step in range(n_thermal):
+        model.sweep(proposal_width=proposal_width)
+        thermal_magnetizations[step] = model.magnetization()
+        thermal_energies[step] = model.total_energy() / lattice_size**2
+        
+    # Compute correlation function
+    magnetizations = np.empty(n_steps)
+    energies = np.empty(n_steps)
+    
+    for step in range(n_steps):
+        model.sweep(proposal_width=proposal_width)
+        magnetizations[step] = model.magnetization()
+        energies[step] = model.total_energy() / lattice_size**2
+    
+    results[temperature] = {
+        "thermal_magnetizations": thermal_magnetizations,
+        "thermal_energies": thermal_energies,
+        "magnetizations": magnetizations,
+        "energies": energies,
+        "final_theta": model.theta
+    }
+    
+    return results
 
 def run_full_temperature_analysis(
     temperatures,
@@ -744,6 +864,29 @@ def plot_initial_condition_comparison(
     plt.tight_layout()
     plt.show()
     
+def plot_correlation_fit(results, temperature):
+    temperature = round(float(temperature), 2)
+    
+    corr = results[temperature]["autocorrelation"]
+    tau = results[temperature]["tau"]
+    
+    lags = np.arange(len(corr))
+    
+    fitted_decay = np.exp(-lags / tau)
+    
+    plt.figure(figsize=(7, 5))
+    plt.plot(lags, corr, label="Autocorrelation")
+    plt.plot(lags, fitted_decay, "--", label=f"exp(-t/τ), τ = {tau:.2f}")
+    plt.axhline(0, linestyle=":", color="black")
+    
+    plt.xlabel("Lag time [sweeps]")
+    plt.ylabel("Normalized autocorrelation")
+    plt.title(f"Autocorrelation decay at T = {temperature}")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
 def plot_full_results(results, selected_temperatures=None):
     """
     Plot all main results from the full temperature analysis.
@@ -923,7 +1066,145 @@ def plot_full_results(results, selected_temperatures=None):
     plt.tight_layout()
     plt.show()
 
+
+#%%
+# Simulate long and save data
+temperature = 0.5
+n_thermal = 2000
+n_steps = 10000
+seed = 0
+
+results = run_single_simulation(temperature = temperature, lattice_size = 50, n_thermal = n_thermal, n_steps = n_steps, seed = 0)
+
+#%%
+# Save data
+file_name = "T" + str(temperature) + ".n_t" + str(n_thermal) + ".n_s" + str(n_steps) + ".s" + str(seed) + ".pkl"
+location_name = "saved_data/" + file_name
+
+# print(os.getcwd()) # to get where python is saving to
+os.chdir(r"C:\Users\David\Documents\Git\ComputationalPhysicsB")
+os.makedirs("saved_data", exist_ok=True)
+
+with open(location_name, "wb") as file:
+    pickle.dump(results, file)
+
+print("Saved!")
+
+#%%
+# Load data
+file_name = "T0.5.n_t20.n_s100.s0.pkl"
+location_name = "saved_data/" + file_name
+
+with open(location_name, "rb") as file:
+    results = pickle.load(file)
+
+#%%
+# Plot magnetizations
+magnetizations = results[0.5]["magnetizations"]
+plt.plot(magnetizations, label=f"Temp = {0.5}", alpha=0.9)
+
+plt.xlabel("Monte Carlo sweep")
+plt.ylabel("Magnetization per spin |M|") 
+plt.title("2D XY model: magnetization vs Monte Carlo sweep")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+
+#%%
+# - Eerst correlatie tijd 5 keer doen temperatuur. (Check waarom die afhankelijk is van hoe lang je hem laat runnen.)
+# %matplotlib qt
+# %matplotlib inline
+
+finding_correlation_temperatures = np.arange(0.5, 2.51, 0.2) #np.arange(0.5, 2.51, 0.2)
+finding_correlation_n_thermals = [200,400,2000,1000,400,200,200,200,200,200,200] #[200,400,2000,1000,400,200,200,200,200,200,200]
+finding_correlation_n_steps = 1000
+
+results = run_correlation_time_analysis(finding_correlation_temperatures, n_steps = finding_correlation_n_steps, n_thermals = finding_correlation_n_thermals)
+
+#%%
+for temp in finding_correlation_temperatures:
+    plot_correlation_fit(results, temperature=temp)
+    print(f'T = {temp}, tau = ' + str(results[temp]["tau"]))
+
+
+#%%
+multiple_seeds_results = []
+for seed in range(5):
+    results = run_correlation_time_analysis([0.5], n_thermals = [200], n_steps = 3000, seed = seed)
+    multiple_seeds_results.append(results)
+#%%
+plot_correlation_fit(multiple_seeds_results[0], temperature=0.5)
+#%%
+
+# show correlations
+colors = ['b', 'g','r','y','m']
+plt.figure(figsize=(7, 5))
+for seed in range(len(multiple_seeds_results)):
+    results = multiple_seeds_results[seed]
     
+    corr = results[0.5]["autocorrelation"]
+    tau = results[0.5]["tau"]
+    
+    lags = np.arange(len(corr))
+    fitted_decay = np.exp(-lags / tau)
+
+    plt.plot(lags, corr, label=f"$\chi$ Seed = {seed}", color = colors[seed], alpha = 0.9)
+    plt.plot(lags, fitted_decay, "--", label=f"exp(-t/τ), τ = {tau:.2f}", color = colors[seed])
+    
+plt.axhline(0, linestyle=":", color="black")
+
+plt.xlabel("Lag time [sweeps]")
+plt.ylabel("Normalized autocorrelation")
+plt.title(f"Autocorrelation decay at T = {0.5}")
+plt.legend(loc = 'upper right')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+#%%
+
+seed_0_results = multiple_seeds_results[0]
+magnetizations = seed_0_results[0.5]["magnetizations"]
+plt.plot(magnetizations, label=f"Temp = {0.5}", alpha=0.9)
+
+plt.xlabel("Monte Carlo sweep")
+plt.ylabel("Magnetization per spin |M|")
+plt.title("2D XY model: magnetization vs Monte Carlo sweep")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+
+#%%
+results = multiple_seeds_results[4]
+plt.plot(results[0.5]["magnetizations"], label=f"Temp = {0.5}", alpha=0.9)
+
+plt.xlabel("Monte Carlo sweep")
+plt.ylabel("Magnetization per spin |M|")
+plt.title("2D XY model: magnetization vs Monte Carlo sweep")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+#%%
+# Show magentizations
+
+for seed in range(len(multiple_seeds_results)):
+    results = multiple_seeds_results[seed]
+    plt.plot(results[0.5]["magnetizations"], label=f"Temp = {0.5}", alpha=0.9)
+
+plt.xlabel("Monte Carlo sweep")
+plt.ylabel("Magnetization per spin |M|")
+plt.title("2D XY model: magnetization vs Monte Carlo sweep")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
 #%% Total run of all observables and correlation time
 results = run_full_temperature_analysis(temperatures, seed = 0)
 
