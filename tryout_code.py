@@ -520,6 +520,48 @@ def run_single_simulation(
     
     return results
 
+def analyse_results(results, temperatures):
+    analysed_results = {}
+    
+    for index, temperature in enumerate(temperatures):
+        magnetizations = results[temperature]["magnetizations"]
+        energies = results[temperature]["energies"]
+        
+        number_of_spins = lattice_size**2
+        energies_per_spin = energies / number_of_spins
+        
+        tau, normalized_correlation = correlation_time(magnetizations)
+    
+        mean_m, error_m, independent_magnetizations = independent_mean_and_error(magnetizations, tau)
+
+        mean_e, error_e, independent_energies = independent_mean_and_error(energies_per_spin, tau)
+
+        chi_m, error_chi_m, specific_heat_value, error_specific_heat = block_errors(magnetizations, energies, temperature, number_of_spins, tau)
+        
+        
+        analysed_results[temperature] = {
+            "magnetizations": magnetizations,
+            "energies": energies,
+            "energies_per_spin": energies_per_spin,
+            "mean_m": mean_m,
+            "error_m": error_m, 
+            "independent_magnetizations": independent_magnetizations,
+            "mean_e": mean_e, 
+            "error_e": error_e, 
+            "independent_energies": independent_energies,
+            "chi_m": chi_m, 
+            "error_chi_m": error_chi_m, 
+            "specific_heat_value": specific_heat_value, 
+            "error_specific_heat": error_specific_heat,
+            "tau": tau, 
+            "normalized_correlation": normalized_correlation
+        }
+    
+    return analysed_results
+        
+
+    
+
 def run_full_temperature_analysis(
     temperatures,
     lattice_size=lattice_size,
@@ -1067,9 +1109,147 @@ def plot_full_results(results, selected_temperatures=None):
     plt.show()
 
 
+# =============================================================================
+# analysed_results[temperature] = {
+#     "magnetizations": magnetizations,
+#     "energies": energies,
+#     "energies_per_spin": energies_per_spin,
+#     "mean_m": mean_m,
+#     "error_m": error_m, 
+#     "independent_magnetizations": independent_magnetizations,
+#     "mean_e": mean_e, 
+#     "error_e": error_e, 
+#     "independent_energies": independent_energies,
+#     "chi_m": chi_m, 
+#     "error_chi_m": error_chi_m, 
+#     "specific_heat_value": specific_heat_value, 
+#     "error_specific_heat": error_specific_heat,
+#     "tau": tau, 
+#     "normalized_correlation": normalized_correlation}
+#
+# =============================================================================
+
+def plot_analysed_results(analysed_results, temperatures):
+        
+    taus = []
+    
+    # plot autocorrelation functions
+    colors = ['r', 'b' , 'g']
+    for index, temperature in enumerate(temperatures):
+        normalized_correlation = analysed_results[temperature]["normalized_correlation"]
+        tau = analysed_results[temperature]["tau"]
+        
+        lags = np.arange(len(normalized_correlation))
+        fitted_decay = np.exp(-lags / tau)
+        taus.append(tau)
+        plt.plot(lags, normalized_correlation, label=f"T = {temperature}", color = colors[index % 3], alpha = 0.9)
+        plt.plot(lags, fitted_decay, "--", label=f"exp(-t/τ), τ = {tau:.2f}", color = colors[index % 3])
+        
+        if index % 3 == 2 or index == len(temperatures) - 1:
+            plt.axhline(0, linestyle=":", color="black")
+        
+            plt.xlabel("Lag time [sweeps]")
+            plt.ylabel("Normalized autocorrelation")
+            plt.xlim(0,20* max(taus[-3:]))
+            plt.title("Autocorrelation decay")
+            plt.legend(loc = 'upper right')
+            plt.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.show()
+        
+    plt.scatter(temperatures, taus, color = 'm')
+    plt.xlabel("Temperature T")
+    plt.ylabel("Correlation time tau")
+    plt.title("Correlation time over temperature")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+    tau = np.array([analysed_results[T]["tau"] for T in temperatures])
+
+    mean_m = np.array([analysed_results[T]["mean_m"] for T in temperatures])
+    error_m = np.array([analysed_results[T]["error_m"] for T in temperatures])
+
+    mean_e = np.array([analysed_results[T]["mean_e"] for T in temperatures])
+    error_e = np.array([analysed_results[T]["error_e"] for T in temperatures])
+
+    chi_m = np.array([analysed_results[T]["chi_m"] for T in temperatures])
+    error_chi_m = np.array([analysed_results[T]["error_chi_m"] for T in temperatures])
+
+    specific_heat_value = np.array([analysed_results[T]["specific_heat_value"] for T in temperatures])
+    error_specific_heat = np.array([analysed_results[T]["error_specific_heat"] for T in temperatures])    
+    
+    # Correlation time
+    plt.figure(figsize=(7, 5))
+    plt.plot(temperatures, tau, "o-", c = 'black')
+    #plt.axvline(critical_temperature, linestyle="--", label=r"$T_c \approx 0.881$")
+    plt.xlabel("Temperature T")
+    plt.ylabel(r"Correlation time $\tau$ [sweeps]")
+    plt.title("Correlation time vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # Magnetization
+    plt.figure(figsize=(7, 5))
+    plt.errorbar(temperatures, mean_m, yerr=error_m, fmt="o-", capsize=4, c = 'black', alpha = 0.8)
+    #plt.axvline(critical_temperature, linestyle="--", label=r"$T_c \approx 0.881$")
+    plt.xlabel("Temperature T")
+    plt.ylabel(r"Magnetization per spin $\langle |m| \rangle$")
+    plt.title("Magnetization vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # Energy
+    plt.figure(figsize=(7, 5))
+    plt.errorbar(temperatures, mean_e, yerr=error_e, fmt="o-", capsize=4, c = 'black', alpha = 0.8)
+    #plt.axvline(critical_temperature, linestyle="--", label=r"$T_c \approx 0.881$")
+    plt.xlabel("Temperature T")
+    plt.ylabel(r"Energy per spin $\langle e \rangle$")
+    plt.title("Energy vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # Magnetic susceptibility
+    plt.figure(figsize=(7, 5))
+    plt.errorbar(temperatures, chi_m, yerr=error_chi_m, fmt="o-", capsize=4, c = 'black', alpha = 0.8)
+    #plt.axvline(critical_temperature, linestyle="--", label=r"$T_c \approx 0.881$")
+    plt.xlabel("Temperature T")
+    plt.ylabel(r"Magnetic susceptibility $\chi_m$")
+    plt.title("Magnetic susceptibility vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # Specific heat
+    plt.figure(figsize=(7, 5))
+    plt.errorbar(temperatures, specific_heat_value, yerr = error_specific_heat, fmt="o-", capsize=4, c = 'black', alpha = 0.8)
+    #plt.axvline(critical_temperature, linestyle="--", label=r"$T_c \approx 0.881$")
+    plt.xlabel("Temperature T")
+    plt.ylabel("Specific heat C")
+    plt.title("Specific heat vs temperature")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    return 
+
+#%%
+
+# print(os.getcwd()) # to get where python is saving to
+os.chdir(r"C:\Users\David\Documents\Git\ComputationalPhysicsB")
+os.makedirs("saved_data", exist_ok=True)
 #%%
 # Simulate long and save data
-for temperature in [1.1, 1.3, 1.5]:
+for temperature in [1.05]:
 
     n_thermal = 2000
     n_steps = 10000
@@ -1082,9 +1262,7 @@ for temperature in [1.1, 1.3, 1.5]:
     file_name = "T" + str(temperature) + ".n_t" + str(n_thermal) + ".n_s" + str(n_steps) + ".s" + str(seed) + ".pkl"
     location_name = "saved_data/" + file_name
     
-    # print(os.getcwd()) # to get where python is saving to
-    os.chdir(r"C:\Users\David\Documents\Git\ComputationalPhysicsB")
-    os.makedirs("saved_data", exist_ok=True)
+    
     
     with open(location_name, "wb") as file:
         pickle.dump(results, file)
@@ -1093,17 +1271,35 @@ for temperature in [1.1, 1.3, 1.5]:
 
 #%%
 # Load data
-file_name = "T0.5.n_t20.n_s100.s0.pkl"
+file_name = "T0.5.n_t2000.n_s10000.s0.pkl"
 location_name = "saved_data/" + file_name
 
 with open(location_name, "rb") as file:
     results = pickle.load(file)
+    
+print("Loaded!")
+
+#%%
+results = {}
+for temperature in np.round(np.arange(0.5, 2.51, 0.2), 2):
+    file_name = "T" + str(temperature) + ".n_t2000.n_s10000.s0.pkl"
+    location_name = "saved_data/" + file_name
+
+    with open(location_name, "rb") as file:
+        data = pickle.load(file)
+        
+    print("Loaded T = " + str(temperature))
+    
+    results.update(data)
+    
+
 
 #%%
 # Plot magnetizations
-magnetizations = results[0.5]["magnetizations"]
-plt.plot(magnetizations, label=f"Temp = {0.5}", alpha=0.9)
-
+for temperature in np.round(np.arange(0.5, 2.51, 0.2), 2):
+    magnetizations = results[temperature]["magnetizations"]
+    plt.plot(magnetizations, label=f"Temp = {temperature}", alpha=0.9)
+    
 plt.xlabel("Monte Carlo sweep")
 plt.ylabel("Magnetization per spin |M|") 
 plt.title("2D XY model: magnetization vs Monte Carlo sweep")
@@ -1112,6 +1308,13 @@ plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
+#%%
+# Analyse
+analysed_results = analyse_results(results, np.round(np.arange(0.5, 2.51, 0.2), 2))
+
+#%%
+# Plot
+plot_analysed_results(analysed_results, np.round(np.arange(0.5, 2.51, 0.2), 2))
 
 #%%
 # - Eerst correlatie tijd 5 keer doen temperatuur. (Check waarom die afhankelijk is van hoe lang je hem laat runnen.)
