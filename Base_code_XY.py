@@ -2,7 +2,7 @@
 """
 Created on Fri Apr 17 11:59:21 2026
 
-@author: David
+@author: David and Jochem
 """
 
 #CompPhysB 
@@ -12,10 +12,10 @@ from matplotlib.animation import FuncAnimation
 
 #%% Simulation parameters
 n_thermal = 3000        # Number of steps to equilibrate
-n_steps =  20         # Number of steps done after equilibration
+n_steps =  5000       # Number of steps done after equilibration
 proposal_width = np.pi/2 # Theta is updated with steps of [-proposal_width, proposal_width]
 T = 0.7                  # Basis temperature for simulations
-lattice_size = 20       # Simulations without specified N are run with this number
+lattice_size = 50       # Simulations without specified N are run with this number
 seed = 43                #
 vortex_interval = 20     # Count number of vortices every ... steps
 critical_temperature = 0.881
@@ -97,6 +97,7 @@ class XYModel2D:
         """
         Thermalize, then record magnetization over time.
         """
+        print(f'Simulate for: n_thermal = {n_thermal}, and n_steps = {n_steps}')
         # Thermalization
         for _ in range(n_thermal):
             self.sweep(proposal_width=proposal_width)
@@ -143,7 +144,6 @@ class XYModel2D:
     
         return energy
 
-
 #%% Seperate functions for milestones and plotting
 def run_sizes(sizes, T=T, n_thermal=n_thermal, n_steps=n_steps, seed=seed):
     results = {}
@@ -157,8 +157,7 @@ def run_sizes(sizes, T=T, n_thermal=n_thermal, n_steps=n_steps, seed=seed):
 
     return results
 
-def run_temperatures(temperatures,lattice_size=lattice_size ,n_steps=n_steps,proposal_width=proposal_width,
-   seed=seed):
+def run_temperatures(temperatures, lattice_size=lattice_size, n_steps=n_steps, proposal_width=proposal_width, seed=seed):
     """
     Run one simulation for each temperature.
 
@@ -186,7 +185,7 @@ def run_temperatures(temperatures,lattice_size=lattice_size ,n_steps=n_steps,pro
     return results
 
         
-def compare_initial_conditions(lattice_size=lattice_size,temperature=T,n_steps=n_steps,proposal_width=proposal_width,seed=seed):
+def compare_initial_conditions(lattice_size=lattice_size, temperature=T, n_steps=n_steps, proposal_width=proposal_width, seed=seed):
     """
     Run two simulations: one random start and one aligned start.
     """
@@ -497,18 +496,24 @@ def correlation_time(values):
         positive_values.append(value)
 
     tau = np.sum(positive_values)
+    
+# =============================================================================
+#     times = np.arange(len(normalized_correlation))
+#     
+#     fitted_decay = np.exp(-times / tau)
+#     
+#     plt.figure(figsize=(7, 5))
+#     plt.plot(times, normalized_correlation)
+#     plt.plot(times, fitted_decay, "--")
+#     plt.xlabel("time t")
+#     plt.ylabel("normalized correlation")
+#     plt.title("normalized correlation")
+#     plt.show()
+# =============================================================================
 
     return tau, normalized_correlation
 
-def run_full_temperature_analysis(
-    temperatures,
-    lattice_size=lattice_size,
-    n_thermal=n_thermal,
-    n_steps=n_steps,
-    proposal_width=proposal_width,
-    vortex_interval=vortex_interval,
-    seed=seed,
-):
+def run_full_temperature_analysis(temperatures, lattice_size=lattice_size, n_thermal=n_thermal, n_steps=n_steps, proposal_width=proposal_width, vortex_interval=vortex_interval, seed=seed):
     """
     For each temperature:
     1. Equilibrate once.
@@ -522,12 +527,7 @@ def run_full_temperature_analysis(
         temperature = round(float(temperature), 2)
         print(f"Running T = {temperature:.2f}")
 
-        model = XYModel2D(
-            N=lattice_size,
-            T=temperature,
-            J=1.0,
-            seed=seed,
-        )
+        model = XYModel2D(N=lattice_size, T=temperature, J=1.0, seed=seed)
         if temperature < critical_temperature:
             model.set_initial_condition("aligned")
         else:
@@ -574,13 +574,45 @@ def run_full_temperature_analysis(
         mean_e = np.mean(energies_per_spin)
         std_e = np.std(energies_per_spin, ddof=1)
 
-        chi_m = beta * number_of_spins * (
-            np.mean(magnetizations**2) - np.mean(magnetizations) ** 2
-        )
+# =============================================================================
+#         chi_m = beta * number_of_spins * (
+#             np.mean(magnetizations**2) - np.mean(magnetizations) ** 2
+#         ) # no blocking?
+# 
+#         specific_heat = beta**2 / number_of_spins * (
+#             np.mean(energies**2) - np.mean(energies) ** 2
+#         ) # no blocking?
+# =============================================================================
+        
+        #finding variance of magnetizations
+        block_size = max(1, int(16 * tau))
+        
+        n_blocks = len(magnetizations) // block_size
 
-        specific_heat = beta**2 / number_of_spins * (
-            np.mean(energies**2) - np.mean(energies) ** 2
-        )
+        trimmed_magnetizations = magnetizations[: n_blocks * block_size]
+        
+        blocks_magnetizations = trimmed_magnetizations.reshape(n_blocks, block_size)
+        
+        block_means_magnetizations = np.mean(blocks_magnetizations, axis=1)
+        
+        magnetization_variance  = np.var(block_means_magnetizations, ddof=1)
+
+        #finding variance of energies
+        block_size = max(1, int(16 * tau))
+        
+        n_blocks = len(energies) // block_size
+
+        trimmed_energies = energies[: n_blocks * block_size]
+        
+        blocks_energies = trimmed_energies.reshape(n_blocks, block_size)
+        
+        block_means_energies = np.mean(blocks_energies, axis=1)
+        
+        energies_variance  = np.var(block_means_energies, ddof=1)
+        
+        chi_m = beta * number_of_spins * magnetization_variance
+
+        specific_heat = beta**2 / number_of_spins * energies_variance
 
         results[temperature] = {
             "tau": tau,
@@ -1020,12 +1052,14 @@ random_magnetizations, aligned_magnetizations = compare_initial_conditions()
 plot_initial_condition_comparison(random_magnetizations,aligned_magnetizations,temperature=T)
 
 #%% Milestone 7.4: animate spin configuration as colored blocks
-%matplotlib qt
+# %matplotlib qt
+# %matplotlib inline
 
 animation = animate_spin_configuration()
 
 #%% Animate spin configuration as arrows
-%matplotlib qt
+# %matplotlib qt
+# %matplotlib inline
 
 animation = animate_spin_arrows()
 
@@ -1055,10 +1089,12 @@ animation = animate_spin_arrows()
 # thermo_results = run_thermodynamic_observables(temperatures=temperatures)
 
 #%% Total run of all observables and correlation time
-temperatures = np.arange(0.5, 2.51, 0.2)
+temperatures = np.arange(0.6, 1.11, 0.1)
 
 results = run_full_temperature_analysis(temperatures)
 
 plot_full_results(results)
 
-plot_equilibration_from_full_run(results,selected_temperatures=[0.5, 0.7, 0.9, 1.1, 2.5])
+plot_equilibration_from_full_run(results,selected_temperatures=temperatures) #[0.5, 0.7, 0.9, 1.1, 2.5])
+
+#%%
